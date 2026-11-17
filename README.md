@@ -98,7 +98,23 @@ curl -I https://2048.1zkl.com/
 curl -fsS https://2048.1zkl.com/release.json
 ```
 
-预期 HTTP 返回 308 跳转到 HTTPS，HTTPS 返回 200 且证书可信，版本内容与 `/2048/current/release.json` 一致。Certbot 通过 `--deploy-hook 'systemctl reload nginx'` 使成功续期后 Nginx 重载；**必须另外确认服务器的 Certbot timer/cron 正常工作**，并运行 `certbot renew --dry-run` 验证自动续期。
+预期 HTTP 返回 308 跳转到 HTTPS，HTTPS 返回 200 且证书可信，版本内容与 `/2048/current/release.json` 一致。
+
+### 自动续期（随同一次 HTTPS 初始化安装）
+
+`bash enable_https.sh` 现在会同时配置 **HTTPS + 自动续期**，不会只签发一次证书。它会安装专用的 systemd `2048-cert-renew.service` 与 `2048-cert-renew.timer`，每天检查两次证书有效期（Certbot 仅在接近到期时实际续期），并在启用前执行 `certbot renew --cert-name 2048.1zkl.com --dry-run --non-interactive`。定时服务只处理该域名，不修改其他 Certbot 证书或停用服务器已有的全局 Certbot timer。
+
+专属 deploy hook 位于 `/etc/letsencrypt/renewal-hooks/deploy/2048-nginx-reload.sh`，只有续期成功且 `RENEWED_LINEAGE` 正好指向该域名时，才运行 `nginx -t` 并重新加载 Nginx。无变化时不会无谓重载；其它站点的证书续期不会触发这个 hook 的重载。失败时恢复原本的续期任务文件和 Nginx 配置，不会返回虚假的安装成功。
+
+在服务器上检查：
+
+```bash
+ssh root@t-fluid.com 'systemctl is-enabled 2048-cert-renew.timer && systemctl is-active 2048-cert-renew.timer'
+ssh root@t-fluid.com 'systemctl list-timers --all 2048-cert-renew.timer'
+ssh root@t-fluid.com 'certbot renew --cert-name 2048.1zkl.com --dry-run --non-interactive'
+```
+
+若此前已经开启 HTTPS 但尚未安装自动续期，更新仓库后**再次执行** `bash enable_https.sh` 即可补装，无需重新签发证书或覆盖已有 TLS 站点。脚本要求远端支持 systemd；如果服务器没有 systemd，会明确失败而不是假装续期已经启用。
 
 ## 在 iPhone 安装
 

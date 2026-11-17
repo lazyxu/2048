@@ -21,6 +21,10 @@ function fixture() {
   const certRoot = join(dir, 'certs');
   const site = join(dir, '2048.conf');
   const log = join(dir, 'commands.log');
+  const systemd = join(dir, 'systemd');
+  const hooks = join(dir, 'renewal-hooks', 'deploy');
+  mkdirSync(systemd, { recursive: true });
+  mkdirSync(hooks, { recursive: true });
   mkdirSync(stage, { recursive: true });
   mkdirSync(bin);
   writeFileSync(join(stage, 'index.html'), '<title>2048</title>');
@@ -30,8 +34,8 @@ function fixture() {
   writeFileSync(site, original);
   const mocks = {
     nginx: '#!/bin/sh\nif [ "$1" = -T ]; then printf "# configuration file %s:\\n" "$DEPLOY_TEST_NGINX_TARGET"; cat "$DEPLOY_TEST_NGINX_TARGET"; exit 0; fi\n[ "${DEPLOY_TEST_FAIL_NGINX:-}" != 1 ]\n',
-    systemctl: '#!/bin/sh\necho "systemctl $*" >> "$DEPLOY_TEST_LOG"\nexit 0\n',
-    certbot: '#!/bin/sh\necho "certbot $*" >> "$DEPLOY_TEST_LOG"\n[ "${DEPLOY_TEST_FAIL_CERTBOT:-}" != 1 ] || exit 42\nmkdir -p "$DEPLOY_TEST_CERT_ROOT/$DEPLOY_TEST_DOMAIN"\nprintf "mock fullchain" > "$DEPLOY_TEST_CERT_ROOT/$DEPLOY_TEST_DOMAIN/fullchain.pem"\nprintf "mock key" > "$DEPLOY_TEST_CERT_ROOT/$DEPLOY_TEST_DOMAIN/privkey.pem"\n',
+    systemctl: '#!/bin/sh\necho "systemctl $*" >> "$DEPLOY_TEST_LOG"\nif [ "${DEPLOY_TEST_FAIL_TIMER:-}" = 1 ] && [ "$1" = enable ]; then exit 52; fi\nexit 0\n',
+    certbot: '#!/bin/sh\necho "certbot $*" >> "$DEPLOY_TEST_LOG"\n[ "${DEPLOY_TEST_FAIL_CERTBOT:-}" != 1 ] || exit 42\nif [ "$1" = renew ] && [ "${DEPLOY_TEST_FAIL_RENEW:-}" = 1 ]; then exit 53; fi\nmkdir -p "$DEPLOY_TEST_CERT_ROOT/$DEPLOY_TEST_DOMAIN"\nprintf "mock fullchain" > "$DEPLOY_TEST_CERT_ROOT/$DEPLOY_TEST_DOMAIN/fullchain.pem"\nprintf "mock key" > "$DEPLOY_TEST_CERT_ROOT/$DEPLOY_TEST_DOMAIN/privkey.pem"\n',
     openssl: '#!/bin/sh\nexit 0\n',
     curl: '#!/bin/bash\nurl="${*: -1}"\nif [[ "$url" == http://127.0.0.1/.well-known/acme-challenge/* ]]; then\n  token="${url##*/}"\n  if [[ "${DEPLOY_TEST_FAIL_ACME:-}" == 1 ]]; then echo wrong-token; else cat "$DEPLOY_TEST_BASE/.well-known/acme-challenge/$token"; fi\nelif [[ "$url" == https://$DEPLOY_TEST_DOMAIN/release.json ]]; then\n  if [[ "${DEPLOY_TEST_FAIL_TLS:-}" == 1 ]]; then echo wrong-site; else cat "$DEPLOY_TEST_BASE/current/release.json"; fi\nelse\n  exit 22\nfi\n',
   };
@@ -48,12 +52,14 @@ function fixture() {
         DEPLOY_TEST_DOMAIN: domain,
         DEPLOY_TEST_BASE: base,
         DEPLOY_TEST_LOG: log,
+        DEPLOY_TEST_SYSTEMD_DIR: systemd,
+        DEPLOY_TEST_RENEW_HOOK_DIR: hooks,
         ...extra,
       },
       encoding: 'utf8', timeout: 10000,
     });
   }
-  return { dir, base, site, certRoot, log, original, run, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+  return { dir, base, site, certRoot, log, systemd, hooks, original, run, bin, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
 test('HTTPS setup defaults to 2048.1zkl.com and dry-run never connects to production', () => {
@@ -92,7 +98,11 @@ linuxTest('HTTPS obtains a separate certificate, redirects public HTTP and prese
     const second = f.run();
     assert.equal(second.status, 0, second.stderr);
     assert.match(second.stdout, /already active/);
-    assert.equal(readFileSync(f.log, 'utf8').split('certbot').length - 1, 1);
+    const log = readFileSync(f.log, 'utf8');
+    assert.equal((log.match(/^certbot certonly /gm) ?? []).length, 1, 'certificate is issued only once');
+    assert.equal((log.match(/^certbot renew --cert-name /gm) ?? []).length, 2, 'renewal dry-run verified on first setup and rerun');
+    assert.match(log, /systemctl enable --now 2048-cert-renew\.timer/);
+    assert.match(log, /systemctl is-active --quiet 2048-cert-renew\.timer/);
   } finally { f.cleanup(); }
 });
 
@@ -127,5 +137,62 @@ linuxTest('an existing manually managed TLS vhost cannot be overwritten', () => 
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /Existing TLS configuration/);
     assert.equal(readFileSync(f.site, 'utf8'), conf);
+  } finally { f.cleanup(); }
+});
+
+
+linuxTest('automatic renewal installs isolated twice-daily timer and successful-cert-only nginx hook', () => {
+  const f = fixture();
+  try {
+    const first = f.run();
+    assert.equal(first.status, 0, first.stderr);
+    const service = readFileSync(join(f.systemd, '2048-cert-renew.service'), 'utf8');
+    const timer = readFileSync(join(f.systemd, '2048-cert-renew.timer'), 'utf8');
+    const hookPath = join(f.hooks, '2048-nginx-reload.sh');
+    const hook = readFileSync(hookPath, 'utf8');
+    assert.match(service, /certbot renew --cert-name 2048\.1zkl\.com --non-interactive --quiet/);
+    assert.match(timer, /OnCalendar=\*-\*-\* 03,15:00:00/);
+    assert.match(timer, /Persistent=true/);
+    assert.match(hook, /RENEWED_LINEAGE/);
+    const firstLog = readFileSync(f.log, 'utf8');
+    assert.match(firstLog, /certbot renew --cert-name 2048\.1zkl\.com --dry-run --non-interactive/);
+    const other = spawnSync('bash', [hookPath], {
+      env: { ...process.env, PATH: f.bin + ':' + process.env.PATH, DEPLOY_TEST_LOG: f.log,
+        RENEWED_LINEAGE: join(f.certRoot, 'another.example.org') }, encoding: 'utf8',
+    });
+    assert.equal(other.status, 0, other.stderr);
+    assert.equal(readFileSync(f.log, 'utf8'), firstLog, 'unrelated renewal never reloads nginx');
+    const own = spawnSync('bash', [hookPath], {
+      env: { ...process.env, PATH: f.bin + ':' + process.env.PATH, DEPLOY_TEST_LOG: f.log,
+        RENEWED_LINEAGE: join(f.certRoot, domain) }, encoding: 'utf8',
+    });
+    assert.equal(own.status, 0, own.stderr);
+    assert.match(readFileSync(f.log, 'utf8'), /systemctl reload nginx/);
+  } finally { f.cleanup(); }
+});
+
+linuxTest('failed renewal dry-run restores prior nginx and removes newly installed timer/hook', () => {
+  const f = fixture();
+  try {
+    const failed = f.run({ DEPLOY_TEST_FAIL_RENEW: '1' });
+    assert.notEqual(failed.status, 0, 'dry-run failure must block HTTPS activation');
+    assert.equal(readFileSync(f.site, 'utf8'), f.original);
+    assert.equal(existsSync(join(f.systemd, '2048-cert-renew.service')), false);
+    assert.equal(existsSync(join(f.systemd, '2048-cert-renew.timer')), false);
+    assert.equal(existsSync(join(f.hooks, '2048-nginx-reload.sh')), false);
+    assert.match(readFileSync(f.log, 'utf8'), /systemctl disable --now 2048-cert-renew\.timer/);
+    assert.match(failed.stderr, /renewal installation or dry-run failed/);
+  } finally { f.cleanup(); }
+});
+
+linuxTest('timer enable failure aborts HTTPS activation and restores old configs', () => {
+  const f = fixture();
+  try {
+    const failed = f.run({ DEPLOY_TEST_FAIL_TIMER: '1' });
+    assert.notEqual(failed.status, 0);
+    assert.equal(readFileSync(f.site, 'utf8'), f.original);
+    assert.equal(existsSync(join(f.systemd, '2048-cert-renew.timer')), false);
+    assert.equal(existsSync(join(f.hooks, '2048-nginx-reload.sh')), false);
+    assert.match(failed.stderr, /renewal installation or dry-run failed/);
   } finally { f.cleanup(); }
 });

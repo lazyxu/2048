@@ -49,6 +49,142 @@ fi
 CERT_ROOT="${DEPLOY_TEST_CERT_ROOT:-/etc/letsencrypt/live}"
 CERT="$CERT_ROOT/$DOMAIN/fullchain.pem"
 KEY="$CERT_ROOT/$DOMAIN/privkey.pem"
+
+# Certbot renews certificates but does not guarantee that a scheduler exists.
+# Install an isolated systemd timer and a certificate-scoped deploy hook, without
+# altering existing Certbot timers or other sites' certificates.
+ensure_renewal() {
+  local unit_dir hook_dir certbot_bin service timer hook path saved tmp
+  if [[ -n "${DEPLOY_TEST_NGINX_TARGET:-}" ]]; then
+    unit_dir="${DEPLOY_TEST_SYSTEMD_DIR:?DEPLOY_TEST_SYSTEMD_DIR required}"
+    hook_dir="${DEPLOY_TEST_RENEW_HOOK_DIR:?DEPLOY_TEST_RENEW_HOOK_DIR required}"
+  else
+    unit_dir="/etc/systemd/system"
+    hook_dir="/etc/letsencrypt/renewal-hooks/deploy"
+  fi
+  service="$unit_dir/2048-cert-renew.service"
+  timer="$unit_dir/2048-cert-renew.timer"
+  hook="$hook_dir/2048-nginx-reload.sh"
+  certbot_bin="$(command -v certbot)"
+  [[ "$certbot_bin" =~ ^/[A-Za-z0-9_./-]+$ ]] || {
+    echo "Unsafe certbot binary path: $certbot_bin" >&2
+    return 1
+  }
+  command -v systemctl >/dev/null || {
+    echo 'systemctl is needed to schedule automatic renewal' >&2
+    return 1
+  }
+  mkdir -p "$unit_dir" "$hook_dir" "$BASE/.https-backups"
+  local -a paths=("$service" "$timer" "$hook") backups=()
+  for path in "${paths[@]}"; do
+    if [[ -L "$path" ]] || { [[ -e "$path" ]] && [[ ! -f "$path" ]]; }; then
+      echo "Unsafe renewal config path: $path" >&2
+      return 1
+    fi
+    if [[ -f "$path" ]] && ! grep -Fq '# Managed by lazyxu/2048' "$path"; then
+      echo "Refusing to overwrite an unmanaged renewal config: $path" >&2
+      return 1
+    fi
+  done
+
+  local was_enabled=0
+  if [[ -f "$timer" ]] && systemctl is-enabled --quiet 2048-cert-renew.timer >/dev/null 2>&1; then
+    was_enabled=1
+  fi
+  for path in "${paths[@]}"; do
+    saved=""
+    if [[ -f "$path" ]]; then
+      saved="$(mktemp "$BASE/.https-backups/renew-original.XXXXXX")"
+      cp -p "$path" "$saved"
+    fi
+    backups+=("$saved")
+  done
+
+  # Bash suppresses errexit for a subshell invoked as an if-condition.
+  # Each essential step below must explicitly exit on failure; otherwise a
+  # later successful systemctl command can mask a failed ACME dry-run.
+  if ! (
+    set -e
+    local temp_service temp_timer temp_hook
+    temp_service="$(mktemp "$unit_dir/.2048-service.XXXXXX")"
+    temp_timer="$(mktemp "$unit_dir/.2048-timer.XXXXXX")"
+    temp_hook="$(mktemp "$hook_dir/.2048-hook.XXXXXX")"
+    trap 'rm -f "$temp_service" "$temp_timer" "$temp_hook"' EXIT
+    cat > "$temp_service" <<UNIT
+# Managed by lazyxu/2048
+[Unit]
+Description=Renew TLS certificate for $DOMAIN
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$certbot_bin renew --cert-name $DOMAIN --non-interactive --quiet
+UNIT
+    cat > "$temp_timer" <<TIMER
+# Managed by lazyxu/2048
+[Unit]
+Description=Check $DOMAIN certificate twice a day
+
+[Timer]
+OnCalendar=*-*-* 03,15:00:00
+RandomizedDelaySec=45m
+Persistent=true
+Unit=2048-cert-renew.service
+
+[Install]
+WantedBy=timers.target
+TIMER
+    cat > "$temp_hook" <<HOOK
+#!/usr/bin/env bash
+# Managed by lazyxu/2048; Certbot runs this hook only after a successful renewal.
+set -euo pipefail
+# Do not reload Nginx for unrelated certificates on the same server.
+[[ "\${RENEWED_LINEAGE:-}" == "$CERT_ROOT/$DOMAIN" ]] || exit 0
+nginx -t
+systemctl reload nginx
+HOOK
+    chmod 0644 "$temp_service" "$temp_timer"
+    chmod 0755 "$temp_hook"
+    bash -n "$temp_hook" || exit 1
+    mv -f "$temp_service" "$service" || exit 1
+    mv -f "$temp_timer" "$timer" || exit 1
+    mv -f "$temp_hook" "$hook" || exit 1
+
+    # The dry-run exercises the real ACME HTTP-01 webroot/renewal configuration.
+    # It is done before the timer starts so no two Certbot invocations race.
+    certbot renew --cert-name "$DOMAIN" --dry-run --non-interactive || exit 1
+    systemctl daemon-reload || exit 1
+    systemctl enable --now 2048-cert-renew.timer || exit 1
+    systemctl is-enabled --quiet 2048-cert-renew.timer || exit 1
+    systemctl is-active --quiet 2048-cert-renew.timer || exit 1
+  ); then
+    echo "Certificate renewal installation or dry-run failed; restoring previous scheduling." >&2
+    if [[ "$was_enabled" != 1 ]]; then
+      systemctl disable --now 2048-cert-renew.timer >/dev/null 2>&1 || true
+    fi
+    local i restore_tmp
+    for i in 0 1 2; do
+      path="${paths[i]}"
+      saved="${backups[i]}"
+      if [[ -n "$saved" ]]; then
+        restore_tmp="$(mktemp "$(dirname "$path")/.2048-restore.XXXXXX")"
+        cp -p "$saved" "$restore_tmp" && mv -f "$restore_tmp" "$path"
+      else
+        rm -f "$path"
+      fi
+    done
+    systemctl daemon-reload || echo 'CRITICAL: Could not reload restored timer units' >&2
+    if [[ "$was_enabled" == 1 ]]; then
+      systemctl enable --now 2048-cert-renew.timer || echo 'CRITICAL: Could not restore existing renewal timer' >&2
+    fi
+    for saved in "${backups[@]}"; do [[ -z "$saved" ]] || rm -f "$saved"; done
+    return 1
+  fi
+  for saved in "${backups[@]}"; do [[ -z "$saved" ]] || rm -f "$saved"; done
+  echo "Automatic renewal active: 2048-cert-renew.timer ($DOMAIN; twice daily)."
+  echo "Dry-run succeeded; Nginx reload is scoped to this certificate."
+}
 # Existing TLS must remain intact. Rechecking a correctly configured domain
 # is idempotent and never replaces its certificate or nginx settings.
 if grep -Eq '(^|[[:space:];{])(listen[[:space:]]+([^;[:space:]]+:)?443([[:space:];]|$)|ssl_certificate[[:space:]]+)' "$SITE"; then
@@ -61,7 +197,12 @@ if grep -Eq '(^|[[:space:];{])(listen[[:space:]]+([^;[:space:]]+:)?443([[:space:
       --resolve "$DOMAIN:443:127.0.0.1" "https://$DOMAIN/release.json" > "$probe" &&
       cmp -s "$BASE/current/release.json" "$probe"; then
       rm -f "$probe"
-      echo "HTTPS already active for https://$DOMAIN/; no changes made."
+      # Existing HTTPS installations from earlier versions also need renewal
+      # scheduling. Do not return before checking and installing the timer.
+      exec 9>"$BASE/.deploy.lock"
+      flock -n 9 || { echo 'Another 2048 deployment is in progress' >&2; exit 2; }
+      ensure_renewal
+      echo "HTTPS already active for https://$DOMAIN/; renewal scheduling verified."
       exit 0
     fi
     rm -f "$probe"
@@ -228,8 +369,11 @@ if ! cmp -s "$expected" "$health_body"; then
   false
 fi
 rm -f "$health_body"
+# Do not declare success unless renewal is scheduled, active, and dry-run tested.
+# Errors here still invoke the existing Nginx TLS rollback trap.
+ensure_renewal
 changed=0
 trap - ERR
 echo "HTTPS enabled for https://$DOMAIN/ (active release verified)."
 echo "Nginx backup kept at: $BACKUP"
-echo 'Check automatic renewal scheduling with: systemctl list-timers | grep -E "certbot|snap.certbot"'
+echo 'Renewal: systemctl status 2048-cert-renew.timer; certbot renew --cert-name "$DOMAIN" --dry-run'
