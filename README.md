@@ -46,14 +46,14 @@ GitHub Actions 的 Ubuntu 作业必须运行全部 8 项部署测试（含 7 项
 2048 是纯静态 PWA，不涉及 `yl` 的 Express、PM2、MySQL、照片上传或备份，因此只部署静态文件；不修改 `/yl0126`、`yl` 的 PM2 服务、数据库及 `/etc/nginx/conf.d/yl0126.conf`。
 
 默认 SSH 目标参照 yl：`root@t-fluid.com:22`；2048 使用**单独目录** `/2048` 和独立 Nginx vhost `/etc/nginx/conf.d/2048.conf`。
-默认示例域名是 **`2048.yl0126.com`**（仅为预设值，**不代表 DNS 或 HTTPS 已配置完成**）。可以通过 `--domain` 指定实际的域名。
+默认域名现为 **`2048.1zkl.com`**，但 DNS 和 TLS 仍必须在服务器上配置。可以用 `--domain` 覆盖。
 
 ```bash
 # 本地测试、打包、预览部署，不连接服务器
 bash release_deploy.sh --dryrun
 
 # 在有服务器 SSH 授权、DNS 和 HTTPS 方案后，手动上线
-bash release_deploy.sh --host t-fluid.com --user root --base /2048 --domain 2048.yl0126.com
+bash release_deploy.sh --host t-fluid.com --user root --base /2048 --domain 2048.1zkl.com
 
 # 如果目标已有手工管理或证书工具改写的 Nginx 配置，默认会保留它；
 # 明确需要覆盖时才用 --nginx-replace（可能覆盖证书配置，请谨慎）
@@ -69,6 +69,36 @@ bash release_deploy.sh --host t-fluid.com --user root --base /2048 --domain 2048
 **iOS PWA 必须通过 HTTPS 访问**。现有 `yl` 部署的 Nginx 模板是 HTTP 入口；2048 的新模板同样只监听 HTTP/80，需通过现有可信的 HTTPS 反向代理或在服务器上单独配置 TLS 证书（例如 Certbot）。要让 `2048.yl0126.com` 可用，还需先设置 DNS 指向正确的公网服务，并保证 443 可用。仓库本身不会自动申请证书或添加 DNS 记录。不要在已有证书工具管理的站点上盲目使用 `--nginx-replace`。
 
 完成 DNS/TLS 配置和发布后，可验证 `https://<你的域名>/`、`/sw.js`、`/manifest.webmanifest` 及离线安装。因为本地存档保存在 `localStorage`，**原 GitHub Pages 和新域名之间的分数、棋盘不会自动迁移**。
+
+## 让 2048.1zkl.com 使用可信 HTTPS
+
+首次成功 SSH 发布仅配置了 Nginx 的 HTTP/80，**不代表 HTTPS 已经可用**。iOS Safari 主屏幕 PWA、Service Worker 和离线模式需要可信 HTTPS。
+
+在有服务器 SSH 权限的 Windows Git Bash 中执行（HTTPS 初始化不要求重新打包游戏）：
+
+```bash
+git pull origin master
+bash enable_https.sh --dryrun
+bash enable_https.sh
+# 可选：提供证书续期通知邮箱（建议）
+bash enable_https.sh --email you@example.com
+```
+
+使用前必须确保：域名 `2048.1zkl.com` 的 A/AAAA 记录正确指向服务该游戏的主机；公网 80/443 可访问；服务器装有 Certbot、OpenSSL 和 Nginx。如服务器缺少 Certbot，可先在 Debian/Ubuntu 上安装 `apt-get update && apt-get install -y certbot`。若 CDN/代理拦截 ACME，请让 `/.well-known/acme-challenge/` 直接到达该主机。**脚本无法代替 DNS 配置或外部防火墙修改。**
+
+`enable_https.sh` 通过 SSH 运行 `scripts/configure-https.sh`，只修改独立的 `2048.conf`：验证其 `/2048/current` 目录归属、备份旧配置、临时开放 HTTP-01 验证路径、使用 Certbot webroot 申请 `2048.1zkl.com` 专属证书，并启用 443 TLS 和 HTTP 308 跳转。TLS 使用 `fullchain.pem`；签发或验证失败会恢复旧 Nginx 配置。已经存在且可验证的 TLS 配置会被保留，人工管理的其他 TLS 配置不会被覆盖。
+
+为了不破坏之后的 `release_deploy.sh`，HTTP `/release.json` 仅允许 127.0.0.1 和 ::1 用于本机发布健康检查，其余公开 HTTP 请求均跳转到 HTTPS。以后正常 `bash release_deploy.sh` 会保留已有 HTTPS；`--nginx-replace` 现在拒绝将现有 TLS 配置降级为 HTTP。
+
+验证公网连接：
+
+```bash
+curl -I http://2048.1zkl.com/
+curl -I https://2048.1zkl.com/
+curl -fsS https://2048.1zkl.com/release.json
+```
+
+预期 HTTP 返回 308 跳转到 HTTPS，HTTPS 返回 200 且证书可信，版本内容与 `/2048/current/release.json` 一致。Certbot 通过 `--deploy-hook 'systemctl reload nginx'` 使成功续期后 Nginx 重载；**必须另外确认服务器的 Certbot timer/cron 正常工作**，并运行 `certbot renew --dry-run` 验证自动续期。
 
 ## 在 iPhone 安装
 
