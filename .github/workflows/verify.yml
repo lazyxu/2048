@@ -26,8 +26,9 @@ jobs:
             echo 'Linux deployment tests must never be skipped' >&2
             exit 1
           fi
-          grep -q '# pass 8' /tmp/2048-deployment-tests.tap
-      - run: bash -n release.sh release_deploy.sh scripts/activate-staged-release.sh
+          grep -q '# pass 9' /tmp/2048-deployment-tests.tap
+      - run: bash -n release.sh release_deploy.sh enable_https.sh scripts/activate-staged-release.sh scripts/configure-https.sh
+      - run: bash enable_https.sh --dryrun
       - run: bash release_deploy.sh --dryrun
       - name: Verify release package
         run: |
@@ -51,6 +52,7 @@ jobs:
           npm run check
           npm test
           bash release_deploy.sh --dryrun
+          bash enable_https.sh --dryrun
           name="$(cat releases/.latest-release)"
           test -s "releases/$name/index.html"
           test -s "releases/$name/sw.js"
