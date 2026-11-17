@@ -19,10 +19,38 @@ jobs:
           node-version: '22'
       - run: npm run check
       - run: npm test
+      - name: Require complete Linux deployment fault-injection coverage
+        run: |
+          node --test --test-reporter=tap tests/deployment.test.js | tee /tmp/2048-deployment-tests.tap
+          if grep -q '# SKIP' /tmp/2048-deployment-tests.tap; then
+            echo 'Linux deployment tests must never be skipped' >&2
+            exit 1
+          fi
+          grep -q '# pass 6' /tmp/2048-deployment-tests.tap
       - run: bash -n release.sh release_deploy.sh scripts/activate-staged-release.sh
       - run: bash release_deploy.sh --dryrun
       - name: Verify release package
         run: |
+          name="$(cat releases/.latest-release)"
+          test -s "releases/$name/index.html"
+          test -s "releases/$name/sw.js"
+          (cd "releases/$name" && sha256sum -c --status SHA256SUMS)
+
+  windows-git-bash:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check, run portable tests and verify SSH release dry-run
+        run: |
+          npm run check
+          npm test
+          bash release_deploy.sh --dryrun
           name="$(cat releases/.latest-release)"
           test -s "releases/$name/index.html"
           test -s "releases/$name/sw.js"
