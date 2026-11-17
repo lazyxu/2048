@@ -1,0 +1,36 @@
+# Managed by lazyxu/2048. Separate site from yl0126.com; HTTPS may be terminated upstream.
+# Template variables are replaced by release_deploy.sh; do not deploy this file directly.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __DOMAIN__;
+    root __WEB_ROOT__;
+    index index.html;
+    charset utf-8;
+    autoindex off;
+
+    location = / {
+        try_files /index.html =404;
+        add_header Cache-Control "no-cache";
+    }
+    location = /index.html {
+        try_files /index.html =404;
+        add_header Cache-Control "no-cache";
+    }
+    location = /sw.js {
+        try_files /sw.js =404;
+        add_header Cache-Control "no-cache, no-store, must-revalidate";
+        add_header Service-Worker-Allowed "/";
+    }
+    location = /manifest.webmanifest {
+        types { application/manifest+json webmanifest; }
+        try_files /manifest.webmanifest =404;
+        add_header Cache-Control "no-cache";
+    }
+    location ~ /\. {
+        deny all;
+    }
+    location / {
+        try_files $uri $uri/ =404;
+    }
+}
