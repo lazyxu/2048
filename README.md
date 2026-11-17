@@ -34,9 +34,9 @@ bash release_deploy.sh --dryrun
 bash release_deploy.sh  # 检查无误、且有远端 SSH 权限后正式发布
 ```
 
-`npm test` 在 Windows 上预期为 **14 passed、5 skipped、0 failed**：5 项涉及 `flock`、原子 symlink、Nginx 回滚的集成测试必须在真正的 Linux 文件系统上运行。Windows Node.js 的 `os.tmpdir()` 是 `C:\...` 风格，而部署脚本只允许远端 Linux POSIX 绝对路径；Git Bash 的 `ln -s` 也不保证具备 Linux symlink 语义。**没有放松生产部署脚本的路径校验，也没有删掉故障注入断言**。
+`npm test` 在 Windows 上预期为 **14 passed、7 skipped、0 failed**：7 项涉及 `flock`、原子 symlink、Nginx 回滚的集成测试必须在真正的 Linux 文件系统上运行。Windows Node.js 的 `os.tmpdir()` 是 `C:\...` 风格，而部署脚本只允许远端 Linux POSIX 绝对路径；Git Bash 的 `ln -s` 也不保证具备 Linux symlink 语义。**没有放松生产部署脚本的路径校验，也没有删掉故障注入断言**。
 
-GitHub Actions 的 Ubuntu 作业必须运行全部 6 项部署测试（含 5 项 Linux 集成测试），且不允许跳过；`windows-latest` 作业另行验证 Git Bash 下的测试、静态打包和 `--dryrun`。希望本地跑满 19 项时，可在 WSL2 Linux 内安装 Node.js 后执行 `npm test`（要从 WSL 的 Node 运行，而非调用 `node.exe`）。
+GitHub Actions 的 Ubuntu 作业必须运行全部 8 项部署测试（含 7 项 Linux 集成测试），且不允许跳过；`windows-latest` 作业另行验证 Git Bash 下的测试、静态打包和 `--dryrun`。希望本地跑满 19 项时，可在 WSL2 Linux 内安装 Node.js 后执行 `npm test`（要从 WSL 的 Node 运行，而非调用 `node.exe`）。
 
 
 ## 发布：与 lazyxu/yl 一样的 SSH / Nginx 方案
@@ -60,7 +60,11 @@ bash release_deploy.sh --host t-fluid.com --user root --base /2048 --domain 2048
 # 已预先手动配置好 Nginx 时，也可用 --skip-nginx
 ```
 
-首次发布创建 `/2048/.2048-releases/release-*` 和 `current` 符号链接，并在没有现有 `2048.conf` 时安装独立 HTTP vhost。以后的发布只原子切换 `/2048/current`，保留上一版本及已有 Nginx 配置。上传的版本含 `release.json`、`SHA256SUMS`，校验失败则拒绝激活；Nginx 校验、重载失败自动恢复上一版本（不能替代对生产机器的实际演练）。
+首次发布创建 `/2048/.2048-releases/release-*` 和 `current` 符号链接，并在没有现有 `2048.conf` 时安装独立 HTTP vhost。部署器会先读取真正生效的 `nginx -T` 配置：如果 Nginx 使用 `/etc/nginx/conf.d/*.conf`，安装到 `/etc/nginx/conf.d/2048.conf`；若只启用了 `/etc/nginx/sites-enabled/*`，则安装到 `/etc/nginx/sites-enabled/2048.conf`。若都未启用，部署会明确报错并退出，不修改其他站点。`nginx -t` 通过后还会确认配置确实被加载。
+
+**健康检查**：激活后通过 `curl --noproxy '*'` 对本机 `127.0.0.1:80` 发出 `Host: <你的域名>` 的请求，获取 `/release.json`，并与发布包中的版本元数据逐字节比较。HTTP 200 但返回错误站点、HTTP 301/302 重定向、404/403、网络代理导致返回不符等均会触发安全回滚，输出 HTTP 状态、`Location` 和定位命令。自动保留已有 Nginx TLS 配置，但若该配置在 HTTP/80 上强制跳转 HTTPS，本地 HTTP 健康检查会失败；应确保内部 HTTP vhost 可供检查，或使用 `--skip-nginx` 自行负责网关验证。
+
+以后的发布只原子切换 `/2048/current`，保留上一版本及已有 Nginx 配置。上传的版本含 `release.json`、`SHA256SUMS`，校验失败则拒绝激活；Nginx 校验、重载失败自动恢复上一版本（不能替代对生产机器的实际演练）。
 
 **iOS PWA 必须通过 HTTPS 访问**。现有 `yl` 部署的 Nginx 模板是 HTTP 入口；2048 的新模板同样只监听 HTTP/80，需通过现有可信的 HTTPS 反向代理或在服务器上单独配置 TLS 证书（例如 Certbot）。要让 `2048.yl0126.com` 可用，还需先设置 DNS 指向正确的公网服务，并保证 443 可用。仓库本身不会自动申请证书或添加 DNS 记录。不要在已有证书工具管理的站点上盲目使用 `--nginx-replace`。
 

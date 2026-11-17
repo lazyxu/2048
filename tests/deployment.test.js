@@ -31,7 +31,7 @@ function fixture() {
   for (const [name, body] of [
     ['nginx', '#!/bin/sh\nprintf "nginx %s\\n" "$*" >> "$DEPLOY_TEST_LOG"\n[ "${DEPLOY_TEST_FAIL_NGINX:-}" != 1 ]'],
     ['systemctl', '#!/bin/sh\nprintf "systemctl %s\\n" "$*" >> "$DEPLOY_TEST_LOG"\n[ "${DEPLOY_TEST_FAIL_RELOAD:-}" != 1 ]'],
-    ['curl', '#!/bin/sh\n[ "${DEPLOY_TEST_FAIL_HEALTH:-}" != 1 ] || exit 22\nprintf "<!doctype html><title>2048 - Test</title>"'],
+    ['curl', "#!/bin/sh\n# Minimal mock of curl's -o, -D and -w flags (no network connection).\nbody=''; headers=''; status=200\nwhile [ \"$#\" -gt 0 ]; do\n  case \"$1\" in\n    -o|-D|-w|-H|--max-time|--connect-timeout|--noproxy)\n      flag=\"$1\"; shift\n      case \"$flag\" in -o) body=\"$1\";; -D) headers=\"$1\";; esac ;;\n  esac\n  shift\ndone\n[ -n \"$body\" ] && [ -n \"$headers\" ] || exit 2\nif [ \"${DEPLOY_TEST_FAIL_HEALTH:-}\" = 1 ]; then exit 22; fi\nif [ \"${DEPLOY_TEST_REDIRECT:-}\" = 1 ]; then\n  status=301\n  printf 'HTTP/1.1 301 Moved Permanently\\r\\nLocation: https://example.org/\\r\\n' > \"$headers\"\n  printf '<title>Moved</title>' > \"$body\"\nelse\n  printf 'HTTP/1.1 200 OK\\r\\n' > \"$headers\"\n  if [ \"${DEPLOY_TEST_WRONG_SITE:-}\" = 1 ]; then\n    printf '<!doctype html><title>Other site</title>' > \"$body\"\n  else\n    cat \"$DEPLOY_TEST_CURRENT/release.json\" > \"$body\"\n  fi\nfi\nprintf \"%s\" \"$status\""],
   ]) {
     const path = join(bin, name);
     writeFileSync(path, body + '\n'); chmodSync(path, 0o755);
@@ -54,7 +54,7 @@ function fixture() {
   }
   function activate(target, mode='auto', extra={}) {
     return spawnSync('bash', [activation, base, target, '2048.example.com', mode], {
-      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, DEPLOY_TEST_NGINX_TARGET: nginx, DEPLOY_TEST_LOG: log, ...extra },
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, DEPLOY_TEST_NGINX_TARGET: nginx, DEPLOY_TEST_LOG: log, DEPLOY_TEST_CURRENT: join(base, 'current'), ...extra },
       encoding: 'utf8', timeout: 5000,
     });
   }
@@ -142,6 +142,33 @@ linuxDeploymentTest('HTTP health-check failure rolls back an otherwise valid act
     const second = f.stage('second');
     const update = f.activate(second, 'replace', { DEPLOY_TEST_FAIL_HEALTH: '1' });
     assert.notEqual(update.status, 0);
+    assert.equal(readlinkSync(join(f.base, 'current')), first);
+  } finally { f.cleanup(); }
+});
+
+linuxDeploymentTest('wrong Nginx site responds 200 but does not match release and rolls back', () => {
+  const f = fixture();
+  try {
+    const first = f.stage('first');
+    assert.equal(f.activate(first).status, 0);
+    const second = f.stage('second');
+    const response = f.activate(second, 'auto', { DEPLOY_TEST_WRONG_SITE: '1' });
+    assert.notEqual(response.status, 0);
+    assert.match(response.stderr, /HTTP 2048 release health check failed: status=200/);
+    assert.equal(readlinkSync(join(f.base, 'current')), first);
+  } finally { f.cleanup(); }
+});
+
+linuxDeploymentTest('HTTP redirects must not be mistaken for a successful release', () => {
+  const f = fixture();
+  try {
+    const first = f.stage('first');
+    assert.equal(f.activate(first).status, 0);
+    const second = f.stage('second');
+    const response = f.activate(second, 'replace', { DEPLOY_TEST_REDIRECT: '1' });
+    assert.notEqual(response.status, 0);
+    assert.match(response.stderr, /status=301/);
+    assert.match(response.stderr, /Location: https:\/\/example\.org/);
     assert.equal(readlinkSync(join(f.base, 'current')), first);
   } finally { f.cleanup(); }
 });
