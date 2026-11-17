@@ -80,6 +80,11 @@ if [[ "$NGINX_MODE" != skip ]]; then
   if "${priv[@]}" test -e "$NGINX_TARGET"; then
     [[ ! -L "$NGINX_TARGET" ]] || { echo 'Nginx target is a symlink; refusing overwrite' >&2; exit 2; }
     if [[ "$NGINX_MODE" == replace ]]; then
+      # Never downgrade an existing HTTPS vhost with the HTTP-only template.
+      if "${priv[@]}" grep -Eq '(^|[[:space:];{])(listen[[:space:]]+([^;[:space:]]+:)?443([[:space:];]|$)|ssl_certificate[[:space:]]+)' "$NGINX_TARGET"; then
+        echo 'Refusing to replace existing HTTPS vhost with the HTTP-only template' >&2
+        exit 2
+      fi
       "${priv[@]}" cp -p "$NGINX_TARGET" "$nginx_backup"
       nginx_existed=1
       nginx_changed=1
