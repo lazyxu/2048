@@ -26,7 +26,7 @@ elif [[ -e "$BASE/current" ]]; then
 fi
 
 priv=()
-if [[ "$(id -u)" != 0 ]]; then priv=(sudo -n); fi
+if [[ "$(id -u)" != 0 && -z "${DEPLOY_TEST_NGINX_TARGET:-}" ]]; then priv=(sudo -n); fi
 nginx_changed=0
 nginx_existed=0
 switched=0
