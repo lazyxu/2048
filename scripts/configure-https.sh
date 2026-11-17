@@ -100,6 +100,9 @@ ensure_renewal() {
     backups+=("$saved")
   done
 
+  # Bash suppresses errexit for a subshell invoked as an if-condition.
+  # Each essential step below must explicitly exit on failure; otherwise a
+  # later successful systemctl command can mask a failed ACME dry-run.
   if ! (
     set -e
     local temp_service temp_timer temp_hook
@@ -143,18 +146,18 @@ systemctl reload nginx
 HOOK
     chmod 0644 "$temp_service" "$temp_timer"
     chmod 0755 "$temp_hook"
-    bash -n "$temp_hook"
-    mv -f "$temp_service" "$service"
-    mv -f "$temp_timer" "$timer"
-    mv -f "$temp_hook" "$hook"
+    bash -n "$temp_hook" || exit 1
+    mv -f "$temp_service" "$service" || exit 1
+    mv -f "$temp_timer" "$timer" || exit 1
+    mv -f "$temp_hook" "$hook" || exit 1
 
     # The dry-run exercises the real ACME HTTP-01 webroot/renewal configuration.
     # It is done before the timer starts so no two Certbot invocations race.
-    certbot renew --cert-name "$DOMAIN" --dry-run --non-interactive
-    systemctl daemon-reload
-    systemctl enable --now 2048-cert-renew.timer
-    systemctl is-enabled --quiet 2048-cert-renew.timer
-    systemctl is-active --quiet 2048-cert-renew.timer
+    certbot renew --cert-name "$DOMAIN" --dry-run --non-interactive || exit 1
+    systemctl daemon-reload || exit 1
+    systemctl enable --now 2048-cert-renew.timer || exit 1
+    systemctl is-enabled --quiet 2048-cert-renew.timer || exit 1
+    systemctl is-active --quiet 2048-cert-renew.timer || exit 1
   ); then
     echo "Certificate renewal installation or dry-run failed; restoring previous scheduling." >&2
     if [[ "$was_enabled" != 1 ]]; then
