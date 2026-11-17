@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f8f6f0">
+  <meta name="description" content="2048 数字方块游戏，专为 iPhone 设计，添加到主屏幕后可离线游玩。">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="2048">
+  <meta name="mobile-web-app-capable" content="yes">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" type="image/svg+xml" href="./icons/icon.svg">
+  <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="./styles.css">
+  <title>2048 — 数字方块</title>
+  <script type="module" src="./src/app.js"></script>
+</head>
+<body>
+  <main class="app-shell">
+    <header class="header">
+      <div class="branding">
+        <p class="eyebrow">指尖上的数字游戏</p>
+        <h1>2048<span class="title-period">.</span></h1>
+      </div>
+      <div class="score-board" aria-label="游戏分数">
+        <div class="score-card">
+          <span class="score-label">分数</span>
+          <strong id="score" class="score-value">0</strong>
+          <span id="score-gain" class="score-gain" aria-hidden="true"></span>
+        </div>
+        <div class="score-card score-card--best">
+          <span class="score-label">最高分</span>
+          <strong id="best" class="score-value">0</strong>
+        </div>
+      </div>
+    </header>
+
+    <div class="intro">
+      <p><strong>合并相同数字</strong>，向 2048 前进。</p>
+      <p class="intro-small">滑动屏幕，开启你的下一次突破。</p>
+    </div>
+
+    <div class="toolbar">
+      <button type="button" class="button button--secondary" id="undo" disabled>
+        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-2"/></svg>
+        撤销
+      </button>
+      <button type="button" class="button button--primary" id="new-game">
+        <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>
+        新游戏
+      </button>
+    </div>
+
+    <section class="board-section" aria-label="2048 游戏棋盘">
+      <div class="game-board" id="board" tabindex="0" role="grid" aria-label="4 乘 4 的 2048 棋盘。上下左右滑动或使用方向键移动方块。">
+        <div id="cells" class="board-cells" role="rowgroup"></div>
+        <div class="game-overlay" id="game-overlay" hidden>
+          <div class="overlay-content">
+            <span class="overlay-symbol" aria-hidden="true">✦</span>
+            <h2 id="overlay-title"></h2>
+            <p id="overlay-text"></p>
+            <button type="button" class="button button--primary" id="overlay-continue">继续挑战</button>
+            <button type="button" class="button button--secondary" id="overlay-restart">再来一局</button>
+          </div>
+        </div>
+      </div>
+      <p class="board-hint"><span class="swipe-icon" aria-hidden="true">↕</span> 向任意方向滑动方块</p>
+    </section>
+
+    <details class="how-to-play">
+      <summary>玩法与安装说明 <span aria-hidden="true">⌄</span></summary>
+      <div class="how-to-content">
+        <p><strong>怎么玩：</strong>向上、下、左、右滑动；两个相同数字碰撞后合并，累积分数。成功合成 2048 后仍可继续挑战。电脑可以用方向键或 WASD 操作。</p>
+        <p><strong>安装到 iPhone：</strong>使用 Safari 打开网页，点底部「分享」按钮，再选择「添加到主屏幕」。安装后可全屏打开，首次联网加载成功后也能离线玩。</p>
+        <p>进度和最高分仅保存在当前设备的浏览器中，清除网站数据会重置记录。</p>
+      </div>
+    </details>
+
+    <footer class="footer"><span class="status-dot" aria-hidden="true"></span><span id="install-status">可添加到主屏幕 · 支持离线游玩</span></footer>
+    <p class="screen-reader-only" aria-live="polite" aria-atomic="true" id="status"></p>
+  </main>
+
+  <dialog id="restart-dialog" class="restart-dialog" aria-labelledby="restart-title">
+    <h2 id="restart-title">开始新游戏？</h2>
+    <p>当前这局的进度会被清除，最高分会保留。</p>
+    <div class="dialog-actions">
+      <form method="dialog"><button type="submit" class="button button--secondary">取消</button></form>
+      <button type="button" id="restart-confirm" class="button button--primary">重新开始</button>
+    </div>
+  </dialog>
+</body>
+</html>
