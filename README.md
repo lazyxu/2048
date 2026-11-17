@@ -10,7 +10,7 @@
 - 单步撤销、新游戏确认、减少动态效果、屏幕阅读器状态播报。
 - `viewport-fit=cover` 安全区域、**180px Apple Touch Icon**、standalone Web App Manifest。
 - Service Worker 缓存离线资源；完成首次联网加载后可离线打开。
-- 纯静态文件，所有资源使用相对路径，适用于 GitHub Pages 子路径 `/2048/`。
+- 纯静态文件，所有资源使用相对路径，适用于独立域名根路径，也可自行调整为其他 HTTPS 静态站点路径。
 
 ## 本地运行与测试
 
@@ -23,13 +23,32 @@ python3 -m http.server 8000 -d dist
 
 浏览器访问 <http://localhost:8000/>。Service Worker 只能在 HTTPS 或 localhost 下注册，不能直接打开 `file://`。
 
-## 发布到 GitHub Pages
+## 发布：与 lazyxu/yl 一样的 SSH / Nginx 方案
 
-1. 在仓库的 **Settings → Pages → Build and deployment** 将 Source 设为 **GitHub Actions**（首次启用需要仓库管理权限）。
-2. 推送或合并到 `master` 后，`.github/workflows/pages.yml` 会先运行语法检查、游戏单测和构建，随后部署 Pages。
-3. 发布成功后的预期地址：<https://lazyxu.github.io/2048/>；以 GitHub Pages 实际部署状态为准。
+本仓库已**不再使用 GitHub Pages**。参照 [`lazyxu/yl`](https://github.com/lazyxu/yl) 的 `release.sh` / `release_deploy.sh`：本地构建 → 独立版本目录 → SSH 上传 → 校验 SHA256 → Nginx 配置验证 → 原子切换当前版本 → 失败回滚。CI 只执行检查、测试和构建，**不会自动连接生产服务器**。
 
-若 Pages 尚未启用，**CI 测试可能成功，但部署 Job 会失败**；启用 Pages 后重新运行工作流即可。
+2048 是纯静态 PWA，不涉及 `yl` 的 Express、PM2、MySQL、照片上传或备份，因此只部署静态文件；不修改 `/yl0126`、`yl` 的 PM2 服务、数据库及 `/etc/nginx/conf.d/yl0126.conf`。
+
+默认 SSH 目标参照 yl：`root@t-fluid.com:22`；2048 使用**单独目录** `/2048` 和独立 Nginx vhost `/etc/nginx/conf.d/2048.conf`。
+默认示例域名是 **`2048.yl0126.com`**（仅为预设值，**不代表 DNS 或 HTTPS 已配置完成**）。可以通过 `--domain` 指定实际的域名。
+
+```bash
+# 本地测试、打包、预览部署，不连接服务器
+bash release_deploy.sh --dryrun
+
+# 在有服务器 SSH 授权、DNS 和 HTTPS 方案后，手动上线
+bash release_deploy.sh --host t-fluid.com --user root --base /2048 --domain 2048.yl0126.com
+
+# 如果目标已有手工管理或证书工具改写的 Nginx 配置，默认会保留它；
+# 明确需要覆盖时才用 --nginx-replace（可能覆盖证书配置，请谨慎）
+# 已预先手动配置好 Nginx 时，也可用 --skip-nginx
+```
+
+首次发布创建 `/2048/.2048-releases/release-*` 和 `current` 符号链接，并在没有现有 `2048.conf` 时安装独立 HTTP vhost。以后的发布只原子切换 `/2048/current`，保留上一版本及已有 Nginx 配置。上传的版本含 `release.json`、`SHA256SUMS`，校验失败则拒绝激活；Nginx 校验、重载失败自动恢复上一版本（不能替代对生产机器的实际演练）。
+
+**iOS PWA 必须通过 HTTPS 访问**。现有 `yl` 部署的 Nginx 模板是 HTTP 入口；2048 的新模板同样只监听 HTTP/80，需通过现有可信的 HTTPS 反向代理或在服务器上单独配置 TLS 证书（例如 Certbot）。要让 `2048.yl0126.com` 可用，还需先设置 DNS 指向正确的公网服务，并保证 443 可用。仓库本身不会自动申请证书或添加 DNS 记录。不要在已有证书工具管理的站点上盲目使用 `--nginx-replace`。
+
+完成 DNS/TLS 配置和发布后，可验证 `https://<你的域名>/`、`/sw.js`、`/manifest.webmanifest` 及离线安装。因为本地存档保存在 `localStorage`，**原 GitHub Pages 和新域名之间的分数、棋盘不会自动迁移**。
 
 ## 在 iPhone 安装
 
