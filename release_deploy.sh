@@ -9,7 +9,7 @@ REMOTE_USER="root"
 REMOTE_HOST="t-fluid.com"
 REMOTE_PORT="22"
 REMOTE_BASE="/2048"
-DOMAIN="2048.yl0126.com" # Example default; requires DNS and HTTPS setup by operator.
+DOMAIN="2048.1zkl.com" # Actual hostname; HTTPS must be configured on the server.
 NGINX_MODE="auto" # Install once; preserve existing config (especially managed TLS) thereafter.
 
 usage() {

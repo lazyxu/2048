@@ -172,3 +172,20 @@ linuxDeploymentTest('HTTP redirects must not be mistaken for a successful releas
     assert.equal(readlinkSync(join(f.base, 'current')), first);
   } finally { f.cleanup(); }
 });
+
+
+linuxDeploymentTest('nginx-replace cannot silently downgrade an existing HTTPS vhost', () => {
+  const f = fixture();
+  try {
+    const first = f.stage('first');
+    assert.equal(f.activate(first).status, 0);
+    const secureConfig = 'server { listen 443 ssl; ssl_certificate /etc/letsencrypt/live/site/fullchain.pem; }\n';
+    writeFileSync(f.nginx, secureConfig);
+    const second = f.stage('second');
+    const attempt = f.activate(second, 'replace');
+    assert.notEqual(attempt.status, 0);
+    assert.match(attempt.stderr, /Refusing to replace existing HTTPS vhost/);
+    assert.equal(readlinkSync(join(f.base, 'current')), first);
+    assert.equal(readFileSync(f.nginx, 'utf8'), secureConfig);
+  } finally { f.cleanup(); }
+});
