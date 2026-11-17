@@ -32,6 +32,25 @@ nginx_existed=0
 switched=0
 nginx_backup="$STAGE/.nginx-previous.conf"
 
+# Nginx can validate its syntax even if our vhost is absent from the active includes.
+# Select a truly enabled site directory; do not touch other applications.
+if [[ "$NGINX_MODE" != skip && -z "${DEPLOY_TEST_NGINX_TARGET:-}" ]]; then
+  nginx_dump="$("${priv[@]}" nginx -T 2>&1)" || {
+    echo 'Cannot inspect active Nginx configuration (nginx -T failed)' >&2
+    exit 2
+  }
+  if grep -Eq '^[[:space:]]*include[[:space:]]+/etc/nginx/conf[.]d/\*([.]conf)?[[:space:]]*;' <<< "$nginx_dump"; then
+    NGINX_TARGET='/etc/nginx/conf.d/2048.conf'
+  elif grep -Eq '^[[:space:]]*include[[:space:]]+/etc/nginx/sites-enabled/\*([.]conf)?[[:space:]]*;' <<< "$nginx_dump"; then
+    NGINX_TARGET='/etc/nginx/sites-enabled/2048.conf'
+  else
+    echo 'No supported Nginx site include is active (conf.d/*.conf or sites-enabled/*).' >&2
+    echo 'Inspect sudo nginx -T; configure a dedicated 2048 vhost before deploying.' >&2
+    exit 2
+  fi
+  echo "Selected active Nginx site path: $NGINX_TARGET"
+fi
+
 rollback() {
   local result="$?"
   trap - ERR
@@ -73,6 +92,14 @@ if [[ "$NGINX_MODE" != skip ]]; then
     "${priv[@]}" cp "$STAGE/.nginx-new.conf" "$NGINX_TARGET"
   fi
   "${priv[@]}" nginx -t
+  if [[ -z "${DEPLOY_TEST_NGINX_TARGET:-}" ]]; then
+    nginx_dump="$("${priv[@]}" nginx -T 2>&1)" || { echo "Failed to re-read active Nginx configuration" >&2; false; }
+    if ! grep -Fq "# configuration file $NGINX_TARGET:" <<< "$nginx_dump"; then
+      echo "Nginx syntax is valid but the 2048 site was NOT loaded: $NGINX_TARGET" >&2
+      echo "Check the active includes with: sudo nginx -T" >&2
+      false
+    fi
+  fi
 fi
 
 # One atomic pointer switch; prior version remains available for rollback.
@@ -82,12 +109,33 @@ switched=1
 
 if [[ "$NGINX_MODE" != skip ]]; then
   "${priv[@]}" systemctl reload nginx
-  # An HTTP Host-header check confirms that the newly managed vhost serves
-  # actual app HTML, without depending on public DNS/TLS provisioning.
-  if [[ "$nginx_changed" == 1 ]]; then
-    response="$(curl --fail --silent --show-error --max-time 5 -H "Host: $DOMAIN" http://127.0.0.1/)"
-    [[ "$response" == *'<title>2048'* ]] || { echo 'HTTP health check returned the wrong site' >&2; false; }
+  # Probe the specific deployed release, not just a shared HTML title.
+  # Force loopback to bypass proxies and reject redirects/wrong-site responses.
+  health_body="$(mktemp "$BASE/.health-body.XXXXXX")"
+  health_headers="$(mktemp "$BASE/.health-headers.XXXXXX")"
+  healthy=0
+  status='000'
+  for attempt in 1 2 3; do
+    status="$(curl --noproxy '*' --silent --show-error --max-time 5 \
+      --connect-timeout 2 -H "Host: $DOMAIN" -D "$health_headers" \
+      -o "$health_body" -w '%{http_code}' \
+      'http://127.0.0.1/release.json')" || status='000'
+    if [[ "$status" == 200 ]] && cmp -s "$STAGE/release.json" "$health_body"; then
+      healthy=1
+      break
+    fi
+    if (( attempt < 3 )); then sleep 1; fi
+  done
+  if [[ "$healthy" != 1 ]]; then
+    location="$(grep -i '^location:' "$health_headers" | tail -n 1 | tr -d '\r' || true)"
+    echo "HTTP 2048 release health check failed: status=$status; expected $STAGE/release.json" >&2
+    if [[ -n "$location" ]]; then echo "Nginx response $location" >&2; fi
+    echo "The local vhost is not serving the expected release. Verify server_name, active site includes, HTTP redirects and root in: sudo nginx -T" >&2
+    echo "Reproduce: curl --noproxy '*' -i -H 'Host: $DOMAIN' http://127.0.0.1/release.json" >&2
+    rm -f "$health_body" "$health_headers"
+    false
   fi
+  rm -f "$health_body" "$health_headers"
 fi
 
 trap - ERR
