@@ -10,6 +10,16 @@ const root = resolve(import.meta.dirname, '..');
 const activation = join(root, 'scripts/activate-staged-release.sh');
 const template = readFileSync(join(root, 'deploy/nginx/2048.conf.template'), 'utf8');
 
+// This harness exercises Linux deployment primitives: absolute POSIX paths,
+// flock, GNU mv -T, and atomic symbolic-link replacement. Windows Node.js
+// produces Win32 temp paths, and Git Bash may emulate 'ln -s' by copying.
+// Keep the production path validation intact and run all fault tests on Linux CI.
+const linuxDeploymentTest = (name, fn) => test(name, {
+  skip: process.platform === 'linux'
+    ? false
+    : 'Linux-only integration: requires POSIX paths, flock and real symlinks (covered in Ubuntu CI)',
+}, fn);
+
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), '2048-deploy-'));
   const base = join(dir, '2048');
@@ -65,7 +75,7 @@ test('manual SSH deployment replaces Pages, with independent Nginx hostname and 
   }
 });
 
-test('first release installs isolated Nginx vhost, then updates only current symlink', () => {
+linuxDeploymentTest('first release installs isolated Nginx vhost, then updates only current symlink', () => {
   const f = fixture();
   try {
     const first = f.stage('first');
@@ -83,7 +93,7 @@ test('first release installs isolated Nginx vhost, then updates only current sym
   } finally { f.cleanup(); }
 });
 
-test('checksum failures block activation before changing live release', () => {
+linuxDeploymentTest('checksum failures block activation before changing live release', () => {
   const f = fixture();
   try {
     const first = f.stage('first');
@@ -96,7 +106,7 @@ test('checksum failures block activation before changing live release', () => {
   } finally { f.cleanup(); }
 });
 
-test('Nginx syntax failure restores previous config and release pointer', () => {
+linuxDeploymentTest('Nginx syntax failure restores previous config and release pointer', () => {
   const f = fixture();
   try {
     const first = f.stage('first');
@@ -110,7 +120,7 @@ test('Nginx syntax failure restores previous config and release pointer', () => 
   } finally { f.cleanup(); }
 });
 
-test('Nginx reload failure rolls back symlink and Nginx configuration', () => {
+linuxDeploymentTest('Nginx reload failure rolls back symlink and Nginx configuration', () => {
   const f = fixture();
   try {
     const first = f.stage('first');
@@ -124,7 +134,7 @@ test('Nginx reload failure rolls back symlink and Nginx configuration', () => {
   } finally { f.cleanup(); }
 });
 
-test('HTTP health-check failure rolls back an otherwise valid activation', () => {
+linuxDeploymentTest('HTTP health-check failure rolls back an otherwise valid activation', () => {
   const f = fixture();
   try {
     const first = f.stage('first');
