@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { runInNewContext } from 'node:vm';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const read = file => readFileSync(join(root, file), 'utf8');
 
@@ -25,4 +26,23 @@ test('app shell assets are present in the offline cache list', () => {
   }
   assert.match(read('index.html'), /apple-touch-icon/);
   assert.match(read('styles.css'), /touch-action: none/);
+});
+
+
+test('service worker activation only deletes this app\'s old caches', async () => {
+  const handlers = {};
+  const deleted = [];
+  const fakeCaches = {
+    keys: async () => ['2048-ios-pwa-v0', '2048-ios-pwa-v1', 'another-pwa-v9'],
+    delete: async key => { deleted.push(key); return true; },
+  };
+  const fakeSelf = {
+    addEventListener: (type, callback) => { handlers[type] = callback; },
+    clients: { claim: async () => {} },
+  };
+  runInNewContext(read('sw.js'), { self: fakeSelf, caches: fakeCaches, Promise });
+  let activation;
+  handlers.activate({ waitUntil: promise => { activation = promise; } });
+  await activation;
+  assert.deepEqual(deleted, ['2048-ios-pwa-v0']);
 });
