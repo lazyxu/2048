@@ -23,6 +23,22 @@ python3 -m http.server 8000 -d dist
 
 浏览器访问 <http://localhost:8000/>。Service Worker 只能在 HTTPS 或 localhost 下注册，不能直接打开 `file://`。
 
+### Windows Git Bash 测试与发布
+
+在 Windows（例如 `MINGW64 /d/code/2048`）执行：
+
+```bash
+npm run check
+npm test
+bash release_deploy.sh --dryrun
+bash release_deploy.sh  # 检查无误、且有远端 SSH 权限后正式发布
+```
+
+`npm test` 在 Windows 上预期为 **14 passed、5 skipped、0 failed**：5 项涉及 `flock`、原子 symlink、Nginx 回滚的集成测试必须在真正的 Linux 文件系统上运行。Windows Node.js 的 `os.tmpdir()` 是 `C:\...` 风格，而部署脚本只允许远端 Linux POSIX 绝对路径；Git Bash 的 `ln -s` 也不保证具备 Linux symlink 语义。**没有放松生产部署脚本的路径校验，也没有删掉故障注入断言**。
+
+GitHub Actions 的 Ubuntu 作业必须运行全部 6 项部署测试（含 5 项 Linux 集成测试），且不允许跳过；`windows-latest` 作业另行验证 Git Bash 下的测试、静态打包和 `--dryrun`。希望本地跑满 19 项时，可在 WSL2 Linux 内安装 Node.js 后执行 `npm test`（要从 WSL 的 Node 运行，而非调用 `node.exe`）。
+
+
 ## 发布：与 lazyxu/yl 一样的 SSH / Nginx 方案
 
 本仓库已**不再使用 GitHub Pages**。参照 [`lazyxu/yl`](https://github.com/lazyxu/yl) 的 `release.sh` / `release_deploy.sh`：本地构建 → 独立版本目录 → SSH 上传 → 校验 SHA256 → Nginx 配置验证 → 原子切换当前版本 → 失败回滚。CI 只执行检查、测试和构建，**不会自动连接生产服务器**。
