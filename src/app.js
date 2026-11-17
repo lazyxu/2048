@@ -189,6 +189,8 @@ let startPointer = null;
 boardEl.addEventListener('pointerdown', event => {
   if (event.pointerType === 'mouse' || !overlayEl.hidden) return;
   startPointer = { x: event.clientX, y: event.clientY, id: event.pointerId };
+  // Retain the swipe even if the finger leaves the board before release.
+  try { boardEl.setPointerCapture?.(event.pointerId); } catch { /* Synthetic pointer events */ }
 });
 boardEl.addEventListener('pointerup', event => {
   if (!startPointer || event.pointerId !== startPointer.id) return;
